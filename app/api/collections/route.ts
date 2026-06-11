@@ -19,12 +19,11 @@ function parsePaymentDate(value: unknown) {
 
 /**
  * GET /api/collections
- *
- * Returns all collection (payment) records.
+ * Returns all collections sorted by transactionId descending (C10 > C9 > C8...).
  * Supports optional query params:
- *   ?customerId=C01 — filter by customer
- *   ?loanId=L01     — filter by loan
- *   ?search=name    — filter by customer name (case-insensitive)
+ *   ?customerId=C01  — filter by customer
+ *   ?loanId=L01      — filter by loan
+ *   ?search=name     — filter by customer name
  */
 export async function GET(request: NextRequest) {
   try {
@@ -42,9 +41,16 @@ export async function GET(request: NextRequest) {
       query.customerName = { $regex: search, $options: "i" };
     }
 
-    const collections = await Collection.find(query).sort({ date: -1 }).lean();
+    const collections = await Collection.find(query).sort({ _id: -1 }).lean();
 
-    return NextResponse.json({ success: true, collections });
+    // Sort by numeric part of transactionId descending (C10 > C9 > C8...)
+    const sorted = collections.slice().sort((a, b) => {
+      const numA = Number(String(a.transactionId).replace(/\D+/g, ""));
+      const numB = Number(String(b.transactionId).replace(/\D+/g, ""));
+      return numB - numA;
+    });
+
+    return NextResponse.json({ success: true, collections: sorted });
   } catch (error) {
     console.error("Failed to fetch collections:", error);
     return NextResponse.json(
@@ -56,12 +62,7 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/collections
- *
- * Records a new payment. Updates the corresponding Loan's paidAmount,
- * the Customer's paidAmount/transactions (for backward compat), and
- * inserts a new Collection document.
- *
- * Body: { customerId, loanId, amount, date?, note? }
+ * Records a new payment.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -97,7 +98,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Fetch loan and customer
     const [loan, customer] = await Promise.all([
       Loan.findOne({ loanId }),
       Customer.findOne({ customerId }),
@@ -119,7 +119,6 @@ export async function POST(request: NextRequest) {
 
     const paymentDate = parsePaymentDate(body?.date);
 
-    // Generate a new transaction ID (C01, C02, ...)
     const counter = await Counter.findOneAndUpdate(
       { name: "transaction" },
       { $inc: { seq: 1 } },
@@ -163,7 +162,7 @@ export async function POST(request: NextRequest) {
       },
     );
 
-    // 3. Keep Customer document in sync (backward compat)
+    // 3. Keep Customer in sync (backward compat)
     const transaction = {
       transactionId,
       amount,
@@ -171,7 +170,6 @@ export async function POST(request: NextRequest) {
       note: String(body?.note ?? "Payment received"),
       profit,
     };
-
     await Customer.findOneAndUpdate(
       { customerId },
       {
@@ -196,9 +194,7 @@ export async function POST(request: NextRequest) {
 
 /**
  * PUT /api/collections
- *
  * Edits an existing collection record.
- * Body: { transactionId, amount, date?, note? }
  */
 export async function PUT(request: NextRequest) {
   try {
@@ -247,20 +243,18 @@ export async function PUT(request: NextRequest) {
           amount,
           date: paymentDate,
           note: String(body?.note ?? existing.note ?? "Payment received"),
-          // preserve original profit
         },
       },
       { new: true },
     );
 
-    // Keep Loan paidAmount in sync
+    // Sync Loan paidAmount
     if (amountDiff !== 0) {
       const loan = await Loan.findOneAndUpdate(
         { loanId: existing.loanId },
         { $inc: { paidAmount: amountDiff } },
         { new: true },
       );
-
       if (loan) {
         const loanRemaining = Math.max(
           Number(loan.totalWithInterest ?? 0) - Number(loan.paidAmount ?? 0),
@@ -268,22 +262,17 @@ export async function PUT(request: NextRequest) {
         );
         await Loan.findOneAndUpdate(
           { loanId: existing.loanId },
-          {
-            $set: {
-              status: loanRemaining === 0 ? "completed" : "ongoing",
-            },
-          },
+          { $set: { status: loanRemaining === 0 ? "completed" : "ongoing" } },
         );
       }
     }
 
-    // Keep Customer in sync
+    // Sync Customer
     if (amountDiff !== 0) {
       const customer = await Customer.findOne({
         customerId: existing.customerId,
       });
       if (customer) {
-        // Update the matching transaction in the Customer's transactions array
         const txIndex = (customer.transactions ?? []).findIndex(
           (tx: any) => String(tx.transactionId) === transactionId,
         );
