@@ -52,6 +52,8 @@ export default function Collections() {
   const [dateFilter, setDateFilter] = useState("all");
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
   // Add-payment dialog
   const [addPaymentDialogOpen, setAddPaymentDialogOpen] = useState(false);
@@ -102,6 +104,10 @@ export default function Collections() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, dateFilter, customStartDate, customEndDate]);
+
   function toLocalDateKey(value: string | Date | number | null | undefined) {
     if (!value) return "";
     const date = new Date(value as string | number);
@@ -144,6 +150,12 @@ export default function Collections() {
 
     return true;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
+  const paginated = filtered.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage,
+  );
 
   async function searchCustomerByIdOrPhone() {
     const identifier = dialogSearchId.trim();
@@ -539,8 +551,8 @@ export default function Collections() {
                   Loading collections...
                 </TableCell>
               </TableRow>
-            ) : filtered.length > 0 ? (
-              filtered.map((col) => (
+            ) : paginated.length > 0 ? (
+              paginated.map((col) => (
                 <TableRow key={col.transactionId}>
                   <TableCell className="font-medium text-xs sm:text-sm whitespace-nowrap">
                     {col.transactionId}
@@ -595,6 +607,40 @@ export default function Collections() {
           </TableBody>
         </Table>
       </div>
+
+      {/* PAGINATION */}
+      {!loading && filtered.length > 0 && (
+        <div className="flex items-center justify-between mt-3 px-1">
+          <div className="text-xs sm:text-sm text-zinc-500">
+            Showing {(currentPage - 1) * itemsPerPage + 1}-
+            {Math.min(currentPage * itemsPerPage, filtered.length)} of{" "}
+            {filtered.length}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3"
+            >
+              Previous
+            </Button>
+            <div className="text-xs sm:text-sm">
+              Page {currentPage} of {totalPages}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3"
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
